@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<title>Elo Song Ranker</title>
+<style>
+  body { font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Inter,Arial; margin:0; background:#0f1115; color:#eaecef; }
+  header { position:sticky; top:0; backdrop-filter: blur(10px); background: rgba(15,17,21,.85); border-bottom:1px solid #252a34; }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 14px; }
+  h1 { margin:0; font-size: 18px; }
+  .section { border:1px solid #252a34; border-radius:12px; padding:12px; margin:12px 0; background:#161a22; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; }
+  .col { flex:1 1 280px; }
+  button { padding: 12px 14px; border-radius: 12px; border:1px solid #2a2f3f; background:#1b2030; color:#fff; font-weight:600; }
+  textarea, input { width:100%; padding:10px; border-radius:10px; border:1px solid #2a2f3f; background:#121520; color:#fff; }
+  .muted { color:#9aa1ac; }
+  .card { border:1px solid #2a2f3f; border-radius: 12px; padding: 12px; background:#121520; min-height:100px; }
+  .big { font-size: 18px; font-weight: 700; }
+  table { width:100%; border-collapse: collapse; }
+  th, td { padding:6px; border-bottom:1px solid #2a2f3f; text-align:left; }
+  #status { padding:10px; border-radius:10px; background:#101625; border:1px solid #2a2f3f; margin-top:8px; }
+  .sticky { position: fixed; bottom: 10px; right: 10px; display:flex; gap:8px; }
+</style>
+</head>
+<body>
+<header><div class="wrap"><h1>Elo Song Ranker</h1><div class="muted">Installable PWA • works offline • perfect for iOS</div></div></header>
+<main class="wrap">
+  <div class="section">
+    <div class="row">
+      <div class="col">
+        <label>Paste CSV (headers: <code>title,artist</code> optional):</label>
+        <textarea id="csv" rows="4" placeholder="title,artist&#10;Ditto,NewJeans"></textarea>
+      </div>
+      <div class="col">
+        <label>&nbsp;</label><br>
+        <button id="btnImport">Import</button>
+        <button id="btnDemo">Load Demo</button>
+        <button id="btnClear">Clear All</button>
+      </div>
+    </div>
+    <div id="status" class="muted">Ready.</div>
+  </div>
+
+  <div id="compare" class="section" style="display:none;">
+    <div class="row">
+      <div class="col card">
+        <div id="leftTitle" class="big">—</div>
+        <div id="leftMeta" class="muted">1500 • 0 matches</div>
+        <button id="leftWin">Left Wins</button>
+      </div>
+      <div class="col card">
+        <div id="rightTitle" class="big">—</div>
+        <div id="rightMeta" class="muted">1500 • 0 matches</div>
+        <button id="rightWin">Right Wins</button>
+      </div>
+    </div>
+    <div>
+      <button id="draw">Draw</button>
+      <button id="next">Next Pair</button>
+      <button id="undo">Undo</button>
+      <button id="leader">Show Leaderboard</button>
+    </div>
+  </div>
+
+  <div id="board" class="section" style="display:none;">
+    <h3>Leaderboard</h3>
+    <table>
+      <thead><tr><th>#</th><th>Song</th><th>Rating</th><th>Matches</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+</main>
+
+<div class="sticky">
+  <button id="btnInstall" style="display:none;">Install App</button>
+  <button id="btnReload" style="display:none;">Update</button>
+</div>
+
+<script>
+// --- PWA: register service worker & install prompt ---
+let deferredPrompt = null;
+const btnInstall = document.getElementById('btnInstall');
+const btnReload = document.getElementById('btnReload');
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js').then(reg => {
+    // Listen for updates
+    if (reg.waiting) btnReload.style.display = 'inline-block';
+    reg.addEventListener('updatefound', () => {
+      const newWorker = reg.installing;
+      newWorker.addEventListener('statechange', () => {
+        if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+          btnReload.style.display = 'inline-block';
+        }
+      });
+    });
+  }).catch(console.error);
+}
+
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredPrompt = e;
+  btnInstall.style.display = 'inline-block';
+});
+
+btnInstall.addEventListener('click', async () => {
+  if (!deferredPrompt) return;
+  deferredPrompt.prompt();
+  await deferredPrompt.userChoice;
+  deferredPrompt = null;
+  btnInstall.style.display = 'none';
+});
+
+btnReload.addEventListener('click', async () => {
+  const regs = await navigator.serviceWorker.getRegistrations();
+  regs.forEach(r => r.waiting && r.waiting.postMessage({type:'SKIP_WAITING'}));
+  location.reload();
+});
+
+// --- App logic (minimal, tested in iOS) ---
+document.addEventListener('DOMContentLoaded', () => {
+  const INITIAL = 1500, BASE_K = 24, K_MIN = 8;
+  const status = document.getElementById('status');
+  function log(msg){ status.textContent = msg; }
+
+  const S = {
+    get songs(){ return JSON.parse(localStorage.getItem('p_songs')||'[]'); },
+    set songs(v){ localStorage.setItem('p_songs', JSON.stringify(v)); },
+    get ratings(){ return JSON.parse(localStorage.getItem('p_ratings')||'{}'); },
+    set ratings(v){ localStorage.setItem('p_ratings', JSON.stringify(v)); },
+    get hist(){ return JSON.parse(localStorage.getItem('p_hist')||'[]'); },
+    set hist(v){ localStorage.setItem('p_hist', JSON.stringify(v)); },
+  };
+
+  function key(s){ return s.artist ? s.title + ' — ' + s.artist : s.title; }
+  function ensureRatings(){
+    const r = S.ratings, ss = S.songs;
+    ss.forEach(s => { const k = key(s); if(!r[k]) r[k] = {rating: INITIAL, matches:0}; });
+    S.ratings = r;
+  }
+
+  function parseCSV(txt){
+    const lines = txt.split(/\r?\n/).filter(x=>x.trim().length);
+    if(!lines.length) return [];
+    const head = lines[0].split(',').map(x=>x.trim().toLowerCase());
+    const iT = head.indexOf('title'), iA = head.indexOf('artist');
+    if(iT === -1) throw new Error("Missing 'title' header");
+    const out = [];
+    for(let i=1;i<lines.length;i++){
+      const parts = lines[i].split(',');
+      const t = (parts[iT]||'').trim();
+      const a = iA>=0 ? (parts[iA]||'').trim() : '';
+      if(t) out.push({title:t, artist:a});
+    }
+    // dedupe
+    const seen = new Set(); const uniq=[];
+    out.forEach(s=>{ const k=key(s); if(!seen.has(k)){ seen.add(k); uniq.push(s);} });
+    return uniq;
+  }
+
+  function exp(ra,rb){ return 1/(1+Math.pow(10,(rb-ra)/400)); }
+  function kf(m){ const k = BASE_K/Math.max(1, (1+m/50)); return Math.max(K_MIN, k); }
+  function update(a,b,res){
+    const r=S.ratings;
+    const ea=exp(r[a].rating,r[b].rating);
+    const eb=1-ea;
+    const ka=kf(r[a].matches), kb=kf(r[b].matches);
+    r[a].rating += ka*(res-ea);
+    r[b].rating += kb*((1-res)-eb);
+    r[a].matches++; r[b].matches++;
+    S.ratings=r;
+  }
+
+  function pickPair(){
+    const keys = Object.keys(S.ratings);
+    if(keys.length<2) return [null,null];
+    const a = keys[Math.floor(Math.random()*keys.length)];
+    let b=a; while(b===a){ b = keys[Math.floor(Math.random()*keys.length)]; }
+    if(Math.random()<0.5) return [a,b]; else return [b,a];
+  }
+
+  const leftTitle = document.getElementById('leftTitle');
+  const rightTitle = document.getElementById('rightTitle');
+  const leftMeta = document.getElementById('leftMeta');
+  const rightMeta = document.getElementById('rightMeta');
+  const cmp = document.getElementById('compare');
+  const board = document.getElementById('board');
+  const rows = document.getElementById('rows');
+  let cur=[null,null];
+
+  function showPair(a,b){
+    const r=S.ratings;
+    cur=[a,b];
+    leftTitle.textContent=a;
+    rightTitle.textContent=b;
+    leftMeta.textContent = Math.round(r[a].rating) + ' • ' + r[a].matches + ' matches';
+    rightMeta.textContent = Math.round(r[b].rating) + ' • ' + r[b].matches + ' matches';
+  }
+
+  function next(){
+    ensureRatings();
+    const pair = pickPair();
+    if(!pair[0]){ log('Need at least 2 songs.'); return; }
+    cmp.style.display='block';
+    board.style.display='none';
+    showPair(pair[0],pair[1]);
+    log('Pick a winner or draw.');
+  }
+
+  function renderBoard(){
+    const r=S.ratings;
+    const arr = Object.entries(r).sort((a,b)=>b[1].rating-a[1].rating);
+    rows.innerHTML='';
+    arr.forEach((kv,i)=>{
+      const tr=document.createElement('tr');
+      tr.innerHTML = `<td>${i+1}</td><td>${kv[0]}</td><td>${kv[1].rating.toFixed(1)}</td><td>${kv[1].matches}</td>`;
+      rows.appendChild(tr);
+    });
+  }
+
+  // Buttons
+  document.getElementById('btnDemo').addEventListener('click', ()=>{
+    const demo=[
+      {title:'Ditto', artist:'NewJeans'},
+      {title:'Plastic Love', artist:'Mariya Takeuchi'},
+      {title:'Nude', artist:'Radiohead'},
+      {title:'Be Sweet', artist:'Japanese Breakfast'}
+    ];
+    const now=S.songs, seen=new Set(now.map(key));
+    demo.forEach(s=>{ const k=key(s); if(!seen.has(k)){ now.push(s); seen.add(k); } });
+    S.songs=now; ensureRatings();
+    log('Loaded demo songs: '+demo.length);
+    next();
+  });
+
+  document.getElementById('btnImport').addEventListener('click', ()=>{
+    try{
+      const txt=document.getElementById('csv').value;
+      const list=parseCSV(txt);
+      if(!list.length){ log('No rows found.'); return; }
+      const now=S.songs, seen=new Set(now.map(key));
+      let added=0;
+      list.forEach(s=>{ const k=key(s); if(!seen.has(k)){ now.push(s); seen.add(k); added++; } });
+      S.songs=now; ensureRatings();
+      log('Imported '+added+' new songs. Total: '+now.length);
+      next();
+    }catch(e){ log('Import error: '+e.message); }
+  });
+
+  document.getElementById('btnClear').addEventListener('click', ()=>{
+    localStorage.removeItem('p_songs');
+    localStorage.removeItem('p_ratings');
+    localStorage.removeItem('p_hist');
+    log('Cleared.');
+    cmp.style.display='none'; board.style.display='none';
+  });
+
+  document.getElementById('leftWin').addEventListener('click', ()=>{
+    if(!cur[0]) return;
+    update(cur[0],cur[1],1.0);
+    const h=S.hist; h.push({a:cur[0],b:cur[1],r:1}); S.hist=h;
+    next();
+  });
+  document.getElementById('rightWin').addEventListener('click', ()=>{
+    if(!cur[0]) return;
+    update(cur[0],cur[1],0.0);
+    const h=S.hist; h.push({a:cur[0],b:cur[1],r:0}); S.hist=h;
+    next();
+  });
+  document.getElementById('draw').addEventListener('click', ()=>{
+    if(!cur[0]) return;
+    update(cur[0],cur[1],0.5);
+    const h=S.hist; h.push({a:cur[0],b:cur[1],r:0.5}); S.hist=h;
+    next();
+  });
+  document.getElementById('next').addEventListener('click', next);
+  document.getElementById('leader').addEventListener('click', ()=>{ renderBoard(); board.style.display='block'; });
+  document.getElementById('undo').addEventListener('click', ()=>{
+    const h=S.hist; if(!h.length){ log('Nothing to undo.'); return; }
+    h.pop(); S.hist=h;
+    // rebuild ratings
+    const base = {}; S.songs.forEach(s=>base[key(s)]={rating:INITIAL,matches:0});
+    S.ratings = base;
+    S.hist.forEach(ev=>{ update(ev.a,ev.b,ev.r); });
+    log('Undid last.'); next();
+  });
+
+  // autostart if data exists
+  if(S.songs.length>=2){
+    ensureRatings();
+    next();
+  } else {
+    log('Paste CSV and press Import, or tap Load Demo. Then use the Install button to add to Home Screen.');
+  }
+});
+</script>
+</body>
+</html>
