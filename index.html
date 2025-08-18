@@ -11,13 +11,13 @@
 <style>
   body { font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Inter,Arial; margin:0; background:#0f1115; color:#eaecef; }
   header { position:sticky; top:0; backdrop-filter: blur(10px); background: rgba(15,17,21,.85); border-bottom:1px solid #252a34; }
-  .wrap { max-width: 900px; margin: 0 auto; padding: 14px; }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 14px; }
   h1 { margin:0; font-size: 18px; }
   .section { border:1px solid #252a34; border-radius:12px; padding:12px; margin:12px 0; background:#161a22; }
   .row { display:flex; gap:8px; flex-wrap:wrap; }
   .col { flex:1 1 280px; }
   button { padding: 12px 14px; border-radius: 12px; border:1px solid #2a2f3f; background:#1b2030; color:#fff; font-weight:600; cursor:pointer; }
-  textarea, input { width:100%; padding:10px; border-radius:10px; border:1px solid #2a2f3f; background:#121520; color:#fff; }
+  textarea, input, select { width:100%; padding:10px; border-radius:10px; border:1px solid #2a2f3f; background:#121520; color:#fff; }
   .muted { color:#9aa1ac; }
   .card { border:1px solid #2a2f3f; border-radius: 12px; padding: 12px; background:#121520; min-height:100px; }
   .big { font-size: 18px; font-weight: 700; }
@@ -25,35 +25,91 @@
   th, td { padding:6px; border-bottom:1px solid #2a2f3f; text-align:left; }
   #status { padding:10px; border-radius:10px; background:#101625; border:1px solid #2a2f3f; margin-top:8px; }
   .sticky { position: fixed; bottom: 10px; right: 10px; display:flex; gap:8px; }
+  .controls-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:8px; }
+  .subtle { font-size:12px; color:#9aa1ac; }
+  .pill { display:inline-block; padding:2px 8px; border:1px solid #2a2f3f; border-radius:999px; background:#121520; margin-left:6px; }
 </style>
 </head>
 <body>
-<header><div class="wrap"><h1>Elo Song Ranker</h1><div class="muted">Installable PWA • works offline • perfect for iOS</div></div></header>
+<header>
+  <div class="wrap">
+    <h1>Elo Song Ranker<span id="modeBadge" class="pill">Auto</span></h1>
+    <div class="muted">Installable PWA • works offline • tuned for fast convergence</div>
+  </div>
+</header>
+
 <main class="wrap">
+
+  <!-- DATA & TRANSFER -->
   <div class="section">
     <div class="row">
       <div class="col">
-        <label>Paste CSV (headers: <code>title,artist</code> optional):</label>
+        <label>Paste CSV (headers: <code>title,artist</code> — quoted commas OK):</label>
         <textarea id="csv" rows="4" placeholder="title,artist&#10;Ditto,NewJeans"></textarea>
       </div>
       <div class="col">
-        <label>&nbsp;</label><br>
-        <button id="btnImport">Import</button>
-        <button id="btnDemo">Load Demo</button>
-        <button id="btnClear">Clear All</button>
-        <!-- NEW: transfer buttons -->
-        <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
+        <div class="controls-grid">
+          <button id="btnImport">Import CSV</button>
+          <button id="btnDemo">Load Demo</button>
+          <button id="btnClear">Clear All</button>
+
           <button id="btnExportJson">Export JSON</button>
           <button id="btnImportJson">Import JSON</button>
           <button id="btnExportCsv">Export CSV</button>
           <button id="btnCopyLeaderboard">Copy Leaderboard</button>
           <button id="btnPasteJson">Paste JSON</button>
+          <button id="btnImportRatingsCsv">Import Ratings CSV</button>
         </div>
       </div>
     </div>
     <div id="status" class="muted">Ready.</div>
   </div>
 
+  <!-- SMART MATCHING CONTROLS -->
+  <div class="section">
+    <h3 style="margin-top:0;">Matching Controls</h3>
+    <div class="controls-grid">
+      <div>
+        <label>Mode</label>
+        <select id="selMode">
+          <option value="auto">Auto (calibrate → near-Elo)</option>
+          <option value="calibrate">Calibrate (coverage first)</option>
+          <option value="near">Near-Elo (exploit)</option>
+          <option value="explore">Explore (random)</option>
+          <option value="focus">Focus Top-N</option>
+        </select>
+      </div>
+      <div>
+        <label>Focus Top-N (0=off)</label>
+        <input id="focusN" type="number" min="0" step="10" value="0">
+      </div>
+      <div>
+        <label>Calibrate ≤ matches</label>
+        <input id="calibMin" type="number" min="1" max="50" value="8">
+      </div>
+      <div>
+        <label>Exploration ε (0–0.5)</label>
+        <input id="epsilon" type="number" min="0" max="0.5" step="0.01" value="0.12">
+      </div>
+      <div>
+        <label>K-nearest pool</label>
+        <input id="kNearest" type="number" min="4" max="50" step="1" value="16">
+      </div>
+      <div>
+        <label>Recent-pair memory</label>
+        <input id="recentMax" type="number" min="20" max="500" step="10" value="200">
+      </div>
+      <div style="align-self:end;">
+        <button id="btnSaveSettings">Save Matching Settings</button>
+      </div>
+      <div style="align-self:end;">
+        <button id="btnResetRecent">Reset Pair Memory</button>
+      </div>
+    </div>
+    <div class="subtle">Tip: Auto mode prioritizes low-match songs until coverage, then pairs close Elo with light exploration.</div>
+  </div>
+
+  <!-- COMPARE -->
   <div id="compare" class="section" style="display:none;">
     <div class="row">
       <div class="col card">
@@ -75,8 +131,10 @@
     </div>
   </div>
 
+  <!-- LEADERBOARD -->
   <div id="board" class="section" style="display:none;">
     <h3>Leaderboard</h3>
+    <div class="subtle" id="statsLine">—</div>
     <table>
       <thead><tr><th>#</th><th>Song</th><th>Rating</th><th>Matches</th></tr></thead>
       <tbody id="rows"></tbody>
@@ -96,17 +154,19 @@ const btnInstall = document.getElementById('btnInstall');
 const btnReload = document.getElementById('btnReload');
 
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('./sw.js').then(reg => {
-    if (reg.waiting) btnReload.style.display = 'inline-block';
-    reg.addEventListener('updatefound', () => {
-      const newWorker = reg.installing;
-      newWorker.addEventListener('statechange', () => {
-        if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-          btnReload.style.display = 'inline-block';
-        }
+  navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' })
+    .then(reg => {
+      reg.update();
+      if (reg.waiting) btnReload.style.display = 'inline-block';
+      reg.addEventListener('updatefound', () => {
+        const nw = reg.installing;
+        nw.addEventListener('statechange', () => {
+          if (nw.state === 'installed' && navigator.serviceWorker.controller) {
+            btnReload.style.display = 'inline-block';
+          }
+        });
       });
-    });
-  }).catch(console.error);
+    }).catch(console.error);
 }
 
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -129,11 +189,30 @@ btnReload.addEventListener('click', async () => {
   location.reload();
 });
 
-// --- App logic (minimal, tested in iOS) ---
+// --- App logic (fast convergence variant) ---
 document.addEventListener('DOMContentLoaded', () => {
   const INITIAL = 1500, BASE_K = 24, K_MIN = 8;
   const status = document.getElementById('status');
+  const modeBadge = document.getElementById('modeBadge');
   function log(msg){ status.textContent = msg; }
+
+  // Settings
+  const DEF = { mode:'auto', focusN:0, calibMin:8, epsilon:0.12, kNearest:16, recentMax:200 };
+  const SETTINGS_KEY = 'p_settings';
+  function loadSettings(){
+    try{ return Object.assign({}, DEF, JSON.parse(localStorage.getItem(SETTINGS_KEY)||'{}')); }
+    catch{ return {...DEF}; }
+  }
+  function saveSettings(s){ localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); applySettingsUI(s); }
+  function applySettingsUI(s){
+    selMode.value = s.mode;
+    focusN.value = s.focusN;
+    calibMin.value = s.calibMin;
+    epsilon.value = s.epsilon;
+    kNearest.value = s.kNearest;
+    recentMax.value = s.recentMax;
+    modeBadge.textContent = s.mode[0].toUpperCase()+s.mode.slice(1);
+  }
 
   const S = {
     get songs(){ return JSON.parse(localStorage.getItem('p_songs')||'[]'); },
@@ -144,35 +223,87 @@ document.addEventListener('DOMContentLoaded', () => {
     set hist(v){ localStorage.setItem('p_hist', JSON.stringify(v)); },
   };
 
+  // Recent pair memory
+  function getRecent(){ return JSON.parse(localStorage.getItem('p_recent_pairs')||'[]'); }
+  function setRecent(arr){ localStorage.setItem('p_recent_pairs', JSON.stringify(arr)); }
+  function pushRecent(a,b, cap){
+    const rec = getRecent();
+    rec.push([a,b]); if (rec.length > cap) rec.shift();
+    setRecent(rec);
+  }
+  function seenRecently(a,b){
+    const rec = getRecent();
+    for (let i=rec.length-1;i>=0;--i){
+      const [x,y] = rec[i];
+      if ((x===a && y===b) || (x===b && y===a)) return true;
+    }
+    return false;
+  }
+
   function key(s){ return s.artist ? s.title + ' — ' + s.artist : s.title; }
+  function splitKey(k){
+    const idx = k.lastIndexOf(' — ');
+    if (idx === -1) return { title:k, artist:'' };
+    return { title: k.slice(0,idx), artist: k.slice(idx+3) };
+  }
+
   function ensureRatings(){
     const r = S.ratings, ss = S.songs;
     ss.forEach(s => { const k = key(s); if(!r[k]) r[k] = {rating: INITIAL, matches:0}; });
     S.ratings = r;
   }
 
-  function parseCSV(txt){
-    const lines = txt.split(/\r?\n/).filter(x=>x.trim().length);
-    if(!lines.length) return [];
-    const head = lines[0].split(',').map(x=>x.trim().toLowerCase());
+  // Robust CSV parse (handles quotes/commas/BOM)
+  function parseCSV(text){
+    if (!text) return [];
+    text = String(text).replace(/^\uFEFF/, ''); // strip BOM
+    const rows = [];
+    let i=0, field='', row=[], inQ=false;
+    while (i < text.length){
+      const c = text[i];
+      if (inQ){
+        if (c === '"'){
+          if (text[i+1] === '"'){ field += '"'; i+=2; continue; }
+          inQ = false; i++; continue;
+        }
+        field += c; i++; continue;
+      } else {
+        if (c === '"'){ inQ = true; i++; continue; }
+        if (c === ','){ row.push(field); field=''; i++; continue; }
+        if (c === '\n' || c === '\r'){
+          // finish row
+          if (c === '\r' && text[i+1]==='\n') i++;
+          row.push(field); field='';
+          if (row.some(x=>x.trim().length)) rows.push(row);
+          row=[]; i++; continue;
+        }
+        field += c; i++;
+      }
+    }
+    row.push(field);
+    if (row.some(x=>x.trim().length)) rows.push(row);
+
+    if (!rows.length) return [];
+    const head = rows[0].map(h=>h.trim().toLowerCase());
     const iT = head.indexOf('title'), iA = head.indexOf('artist');
-    if(iT === -1) throw new Error("Missing 'title' header");
-    const out = [];
-    for(let i=1;i<lines.length;i++){
-      const parts = lines[i].split(',');
-      const t = (parts[iT]||'').trim();
-      const a = iA>=0 ? (parts[iA]||'').trim() : '';
-      if(t) out.push({title:t, artist:a});
+    if (iT === -1) throw new Error("Missing 'title' header");
+    const out=[];
+    for (let r=1; r<rows.length; r++){
+      const cols = rows[r];
+      const t = (cols[iT]||'').trim();
+      const a = iA>=0 ? (cols[iA]||'').trim() : '';
+      if (t) out.push({title:t, artist:a});
     }
     // dedupe
-    const seen = new Set();
-    const uniq=[];
+    const seen = new Set(), uniq=[];
     out.forEach(s=>{ const k=key(s); if(!seen.has(k)){ seen.add(k); uniq.push(s);} });
     return uniq;
   }
 
+  // Elo machinery
   function exp(ra,rb){ return 1/(1+Math.pow(10,(rb-ra)/400)); }
   function kf(m){ const k = BASE_K/Math.max(1, (1+m/50)); return Math.max(K_MIN, k); }
+  function uncertainty(m){ return 1/Math.sqrt(1 + m); } // simple RD proxy
   function update(a,b,res){
     const r=S.ratings;
     const ea=exp(r[a].rating,r[b].rating);
@@ -184,14 +315,77 @@ document.addEventListener('DOMContentLoaded', () => {
     S.ratings=r;
   }
 
-  function pickPair(){
-    const keys = Object.keys(S.ratings);
+  // Smart pairing
+  function pickPairSmart(){
+    const settings = loadSettings();
+    const R = S.ratings;
+    const keys = Object.keys(R);
     if(keys.length<2) return [null,null];
-    const a = keys[Math.floor(Math.random()*keys.length)];
-    let b=a; while(b===a){ b = keys[Math.floor(Math.random()*keys.length)]; }
-    return (Math.random()<0.5) ? [a,b] : [b,a];
+
+    // Focus scope
+    let scopeKeys = keys.slice();
+    if (settings.mode === 'focus' && settings.focusN > 0){
+      scopeKeys = keys.slice().sort((a,b)=>R[b].rating-R[a].rating).slice(0, settings.focusN);
+    }
+
+    // Calibration check
+    const minMatches = Math.min(...scopeKeys.map(k=>R[k].matches||0));
+    const calibrating = (settings.mode==='calibrate') || (settings.mode==='auto' && minMatches < settings.calibMin);
+    const exploring = (settings.mode==='explore');
+
+    const epsilon = (settings.mode==='near' || settings.mode==='focus') ? settings.epsilon*0.5
+                     : (settings.mode==='calibrate') ? settings.epsilon*1.2
+                     : settings.epsilon;
+
+    // Exploration branch
+    if (exploring || Math.random() < epsilon){
+      for (let tries=0; tries<50; tries++){
+        const a = scopeKeys[Math.floor(Math.random()*scopeKeys.length)];
+        let b=a; while(b===a){ b = scopeKeys[Math.floor(Math.random()*scopeKeys.length)]; }
+        if (!seenRecently(a,b)) return (Math.random()<0.5) ? [a,b] : [b,a];
+      }
+    }
+
+    // Anchor: bias toward low matches (coverage), but allow some randomness
+    const weights = scopeKeys.map(k => 1 / (1 + (R[k].matches||0)));
+    const totalW = weights.reduce((a,b)=>a+b,0);
+    let r = Math.random() * totalW, anchor = scopeKeys[0];
+    for (let i=0;i<scopeKeys.length;i++){ r -= weights[i]; if (r<=0){ anchor = scopeKeys[i]; break; } }
+
+    // Build k-nearest candidate pool by Elo proximity
+    const sorted = scopeKeys.slice().sort((a,b)=>R[a].rating-R[b].rating);
+    const idx = sorted.indexOf(anchor);
+    const pool = [];
+    let left = idx-1, right = idx+1;
+    while (pool.length < Math.min(settings.kNearest, sorted.length-1) && (left>=0 || right<sorted.length)){
+      // alternate sides
+      if (left>=0){ if (!seenRecently(anchor, sorted[left])) pool.push(sorted[left]); left--; }
+      if (right<sorted.length && pool.length < settings.kNearest){ if (!seenRecently(anchor, sorted[right])) pool.push(sorted[right]); right++; }
+    }
+    // Score candidates: prefer close Elo and higher combined uncertainty; small jitter helps avoid loops
+    const aR = R[anchor].rating, aU = uncertainty(R[anchor].matches||0);
+    const scored = pool.map(k=>{
+      const diff = Math.abs((R[k].rating||INITIAL) - aR);
+      const bU = uncertainty(R[k].matches||0);
+      const infoScore = diff / (aU + bU + 1e-6); // lower is better
+      const load = Math.abs((R[k].matches||0) - (R[anchor].matches||0));
+      const penalty = 0.5*load;
+      const jitter = Math.random()*1e-3;
+      return { k, s: infoScore + penalty + jitter };
+    }).sort((x,y)=>x.s-y.s);
+
+    // In calibration, allow wider pool to cover new items; in near/focus, keep tighter
+    const take = calibrating ? Math.min(scored.length, Math.max(8, settings.kNearest))
+                             : Math.min(scored.length, settings.kNearest);
+    const cand = scored.slice(0, Math.max(1, take));
+    const opponent = cand.length ? cand[Math.floor(Math.random()*cand.length)].k
+                                 : // fallback: closest by Elo ignoring recent
+                                   keys.slice().sort((a,b)=>Math.abs(R[a].rating-aR)-Math.abs(R[b].rating-aR))
+                                       .find(k=>k!==anchor) || keys.find(k=>k!==anchor);
+    return (Math.random()<0.5) ? [anchor, opponent] : [opponent, anchor];
   }
 
+  // UI refs
   const leftTitle = document.getElementById('leftTitle');
   const rightTitle = document.getElementById('rightTitle');
   const leftMeta = document.getElementById('leftMeta');
@@ -199,6 +393,17 @@ document.addEventListener('DOMContentLoaded', () => {
   const cmp = document.getElementById('compare');
   const board = document.getElementById('board');
   const rows = document.getElementById('rows');
+  const statsLine = document.getElementById('statsLine');
+
+  const selMode = document.getElementById('selMode');
+  const focusN = document.getElementById('focusN');
+  const calibMin = document.getElementById('calibMin');
+  const epsilon = document.getElementById('epsilon');
+  const kNearest = document.getElementById('kNearest');
+  const recentMax = document.getElementById('recentMax');
+  const btnSaveSettings = document.getElementById('btnSaveSettings');
+  const btnResetRecent = document.getElementById('btnResetRecent');
+
   let cur=[null,null];
 
   function showPair(a,b){
@@ -212,12 +417,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function next(){
     ensureRatings();
-    const pair = pickPair();
+    const pair = pickPairSmart();
     if(!pair[0]){ log('Need at least 2 songs.'); return; }
     cmp.style.display='block';
     board.style.display='none';
     showPair(pair[0],pair[1]);
     log('Pick a winner or draw.');
+  }
+
+  function calcStats(){
+    const r=S.ratings;
+    const keys = Object.keys(r);
+    if (!keys.length){ statsLine.textContent = '—'; return; }
+    const matches = keys.map(k=>r[k].matches||0).sort((a,b)=>a-b);
+    const n = keys.length, total = matches.reduce((a,b)=>a+b,0);
+    const avg = (total/n).toFixed(1);
+    const p25 = matches[Math.floor(n*0.25)]||0;
+    const p50 = matches[Math.floor(n*0.50)]||0;
+    const p75 = matches[Math.floor(n*0.75)]||0;
+    const min = matches[0]||0, max=matches[matches.length-1]||0;
+    const top50 = keys.slice().sort((a,b)=>r[b].rating-r[a].rating).slice(0,50);
+    const topAvgMatches = (top50.reduce((s,k)=>s+(r[k].matches||0),0)/Math.max(1,top50.length)).toFixed(1);
+    statsLine.textContent = `Songs: ${n} • Total comps: ${S.hist.length} • Matches/track avg ${avg} (p25 ${p25} / p50 ${p50} / p75 ${p75} / min ${min} / max ${max}) • Top50 avg matches ${topAvgMatches}`;
   }
 
   function renderBoard(){
@@ -229,6 +450,7 @@ document.addEventListener('DOMContentLoaded', () => {
       tr.innerHTML = `<td>${i+1}</td><td>${kv[0]}</td><td>${kv[1].rating.toFixed(1)}</td><td>${kv[1].matches}</td>`;
       rows.appendChild(tr);
     });
+    calcStats();
   }
 
   // --- helpers for transfer ---
@@ -248,7 +470,6 @@ document.addEventListener('DOMContentLoaded', () => {
       await navigator.clipboard.writeText(text);
       log('Copied to clipboard.');
     }catch{
-      // Fallback
       const ta=document.createElement('textarea');
       ta.value=text; document.body.appendChild(ta); ta.select();
       document.execCommand('copy'); ta.remove();
@@ -289,6 +510,7 @@ document.addEventListener('DOMContentLoaded', () => {
     localStorage.removeItem('p_songs');
     localStorage.removeItem('p_ratings');
     localStorage.removeItem('p_hist');
+    setRecent([]);
     log('Cleared.');
     cmp.style.display='none'; board.style.display='none';
   });
@@ -296,18 +518,24 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('leftWin').addEventListener('click', ()=>{
     if(!cur[0]) return;
     update(cur[0],cur[1],1.0);
+    const settings = loadSettings();
+    pushRecent(cur[0], cur[1], settings.recentMax);
     const h=S.hist; h.push({a:cur[0],b:cur[1],r:1}); S.hist=h;
     next();
   });
   document.getElementById('rightWin').addEventListener('click', ()=>{
     if(!cur[0]) return;
     update(cur[0],cur[1],0.0);
+    const settings = loadSettings();
+    pushRecent(cur[0], cur[1], settings.recentMax);
     const h=S.hist; h.push({a:cur[0],b:cur[1],r:0}); S.hist=h;
     next();
   });
   document.getElementById('draw').addEventListener('click', ()=>{
     if(!cur[0]) return;
     update(cur[0],cur[1],0.5);
+    const settings = loadSettings();
+    pushRecent(cur[0], cur[1], settings.recentMax);
     const h=S.hist; h.push({a:cur[0],b:cur[1],r:0.5}); S.hist=h;
     next();
   });
@@ -315,31 +543,34 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('leader').addEventListener('click', ()=>{ renderBoard(); board.style.display='block'; });
   document.getElementById('undo').addEventListener('click', ()=>{
     const h=S.hist; if(!h.length){ log('Nothing to undo.'); return; }
-    h.pop(); S.hist=h;
-    // rebuild ratings
+    const last = h.pop(); S.hist=h;
+    // rebuild ratings from scratch for correctness
     const base = {}; S.songs.forEach(s=>base[key(s)]={rating:INITIAL,matches:0});
     S.ratings = base;
     S.hist.forEach(ev=>{ update(ev.a,ev.b,ev.r); });
+    // also remove that pair from recent memory
+    const settings = loadSettings();
+    const rec = getRecent().filter(([x,y])=>!( (x===last.a&&y===last.b) || (x===last.b&&y===last.a) ));
+    setRecent(rec.slice(-settings.recentMax));
     log('Undid last.'); next();
   });
 
-  // --- NEW: Export/Import actions ---
+  // Export/Import JSON & CSV
   document.getElementById('btnExportJson').addEventListener('click', async ()=>{
     const payload = {
-      version: 1,
+      version: 2,
       ts: new Date().toISOString(),
       songs: S.songs,
       ratings: S.ratings,
-      history: S.hist
+      history: S.hist,
+      settings: loadSettings()
     };
     const data = JSON.stringify(payload, null, 2);
-    // If Share API exists, offer it
-    if (navigator.share) {
+    if (navigator.share && 'canShare' in navigator && navigator.canShare?.({ files:[new File([data],'elo_backup.json',{type:'application/json'})] })){
       try{
         const file = new File([data], 'elo_backup.json', { type: 'application/json' });
         await navigator.share({ files: [file], title: 'Elo backup', text: 'Elo backup JSON' });
-        log('Shared backup via system share sheet.');
-        return;
+        log('Shared backup via system share sheet.'); return;
       }catch{}
     }
     download('elo_backup.json', data, 'application/json');
@@ -358,6 +589,7 @@ document.addEventListener('DOMContentLoaded', () => {
         S.songs   = data.songs;
         S.ratings = data.ratings;
         S.hist    = Array.isArray(data.history)? data.history : [];
+        if (data.settings) saveSettings(Object.assign({}, loadSettings(), data.settings));
         // ensure every song has a rating
         const base=S.ratings;
         S.songs.forEach(s=>{ const k=key(s); if(!base[k]) base[k]={rating:INITIAL,matches:0}; });
@@ -394,6 +626,7 @@ document.addEventListener('DOMContentLoaded', () => {
       S.songs   = data.songs;
       S.ratings = data.ratings;
       S.hist    = Array.isArray(data.history)? data.history : [];
+      if (data.settings) saveSettings(Object.assign({}, loadSettings(), data.settings));
       // ensure ratings for all songs
       const base=S.ratings;
       S.songs.forEach(s=>{ const k=key(s); if(!base[k]) base[k]={rating:INITIAL,matches:0}; });
@@ -402,7 +635,62 @@ document.addEventListener('DOMContentLoaded', () => {
     }catch(err){ log('Paste error: '+(err?.message||String(err))); }
   });
 
+  // Import leaderboard CSV as seed ratings (rank,title_artist,rating,matches)
+  document.getElementById('btnImportRatingsCsv').addEventListener('click', ()=>{
+    const txt = prompt('Paste leaderboard CSV (rank,title_artist,rating,matches):');
+    if(!txt) return;
+    try{
+      const lines = txt.replace(/^\uFEFF/,'').split(/\r?\n/).filter(x=>x.trim().length);
+      const head = lines[0].split(',').map(x=>x.trim().toLowerCase());
+      const iKey = head.indexOf('title_artist'), iR = head.indexOf('rating'), iM = head.indexOf('matches');
+      if (iKey===-1 || iR===-1) throw new Error('Missing headers');
+      const ratings={}, songs=[];
+      for (let i=1;i<lines.length;i++){
+        const raw = lines[i];
+        // naive CSV cell parse for 4 cols
+        const m = raw.match(/^([^,]*),"(.*)",([^,]+),?([^,]*)$/) || raw.match(/^([^,]*),([^,]+),([^,]+),?([^,]*)$/);
+        const cols = m ? [m[1], m[2], m[3], m[4]||''] : raw.split(',');
+        const keyCell = (cols[iKey]||cols[1]||'').replace(/^"|"$/g,'').replace(/""/g,'"').trim();
+        const rating = parseFloat(cols[iR]||cols[2]||'1500')||1500;
+        const matches = parseInt(cols[iM]||cols[3]||'0',10)||0;
+        if (!keyCell) continue;
+        ratings[keyCell] = { rating, matches };
+        const {title,artist} = splitKey(keyCell);
+        songs.push({title, artist});
+      }
+      // Merge with existing songs if any
+      const seen=new Set(); const merged=[];
+      songs.forEach(s=>{ const k=key(s); if(!seen.has(k)){ seen.add(k); merged.push(s); } });
+      S.songs = merged;
+      S.ratings = ratings;
+      S.hist = [];
+      log('Imported seed ratings from CSV.'); next();
+    }catch(e){ log('Import error: '+e.message); }
+  });
+
+  // Settings handlers
+  btnSaveSettings.addEventListener('click', ()=>{
+    const s = {
+      mode: selMode.value,
+      focusN: Math.max(0, parseInt(focusN.value||'0',10)),
+      calibMin: Math.max(1, parseInt(calibMin.value||'8',10)),
+      epsilon: Math.max(0, Math.min(0.5, parseFloat(epsilon.value||'0.12'))),
+      kNearest: Math.max(4, parseInt(kNearest.value||'16',10)),
+      recentMax: Math.max(20, parseInt(recentMax.value||'200',10)),
+    };
+    saveSettings(s);
+    log('Saved matching settings.');
+  });
+
+  btnResetRecent.addEventListener('click', ()=>{ setRecent([]); log('Cleared recent pair memory.'); });
+
+  selMode.addEventListener('change', ()=>{ const s=loadSettings(); s.mode=selMode.value; saveSettings(s); });
+  [focusN, calibMin, epsilon, kNearest, recentMax].forEach(inp=>{
+    inp.addEventListener('change', ()=>{ const s=loadSettings(); s[inp.id]==null?null:s[inp.id]= (inp.id==='epsilon'? parseFloat(inp.value): parseInt(inp.value,10)); saveSettings(s); });
+  });
+
   // autostart if data exists
+  applySettingsUI(loadSettings());
   if(S.songs.length>=2){
     ensureRatings();
     next();
