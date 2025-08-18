@@ -317,73 +317,99 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Smart pairing
   function pickPairSmart(){
-    const settings = loadSettings();
-    const R = S.ratings;
-    const keys = Object.keys(R);
-    if(keys.length<2) return [null,null];
+  const settings = loadSettings();
+  const R = S.ratings;
+  const keys = Object.keys(R);
+  if(keys.length<2) return [null,null];
 
-    // Focus scope
-    let scopeKeys = keys.slice();
-    if (settings.mode === 'focus' && settings.focusN > 0){
-      scopeKeys = keys.slice().sort((a,b)=>R[b].rating-R[a].rating).slice(0, settings.focusN);
-    }
-
-    // Calibration check
-    const minMatches = Math.min(...scopeKeys.map(k=>R[k].matches||0));
-    const calibrating = (settings.mode==='calibrate') || (settings.mode==='auto' && minMatches < settings.calibMin);
-    const exploring = (settings.mode==='explore');
-
-    const epsilon = (settings.mode==='near' || settings.mode==='focus') ? settings.epsilon*0.5
-                     : (settings.mode==='calibrate') ? settings.epsilon*1.2
-                     : settings.epsilon;
-
-    // Exploration branch
-    if (exploring || Math.random() < epsilon){
-      for (let tries=0; tries<50; tries++){
-        const a = scopeKeys[Math.floor(Math.random()*scopeKeys.length)];
-        let b=a; while(b===a){ b = scopeKeys[Math.floor(Math.random()*scopeKeys.length)]; }
-        if (!seenRecently(a,b)) return (Math.random()<0.5) ? [a,b] : [b,a];
-      }
-    }
-
-    // Anchor: bias toward low matches (coverage), but allow some randomness
-    const weights = scopeKeys.map(k => 1 / (1 + (R[k].matches||0)));
-    const totalW = weights.reduce((a,b)=>a+b,0);
-    let r = Math.random() * totalW, anchor = scopeKeys[0];
-    for (let i=0;i<scopeKeys.length;i++){ r -= weights[i]; if (r<=0){ anchor = scopeKeys[i]; break; } }
-
-    // Build k-nearest candidate pool by Elo proximity
-    const sorted = scopeKeys.slice().sort((a,b)=>R[a].rating-R[b].rating);
-    const idx = sorted.indexOf(anchor);
-    const pool = [];
-    let left = idx-1, right = idx+1;
-    while (pool.length < Math.min(settings.kNearest, sorted.length-1) && (left>=0 || right<sorted.length)){
-      // alternate sides
-      if (left>=0){ if (!seenRecently(anchor, sorted[left])) pool.push(sorted[left]); left--; }
-      if (right<sorted.length && pool.length < settings.kNearest){ if (!seenRecently(anchor, sorted[right])) pool.push(sorted[right]); right++; }
-    }
-    // Score candidates: prefer close Elo and higher combined uncertainty; small jitter helps avoid loops
-    const aR = R[anchor].rating, aU = uncertainty(R[anchor].matches||0);
-    const scored = pool.map(k=>{
-      const diff = Math.abs((R[k].rating||INITIAL) - aR);
-      const bU = uncertainty(R[k].matches||0);
-      const infoScore = diff / (aU + bU + 1e-6); // lower is better
-      const load = Math.abs((R[k].matches||0) - (R[anchor].matches||0));
-      const penalty = 0.5*load;
-      const jitter = Math.random()*1e-3;
-      return { k, s: infoScore + penalty + jitter };
-    }).sort((x,y)=>x.s-y.s);
-
-    // In calibration, allow wider pool to cover new items; in near/focus, keep tighter
-    const take = calibrating ? Math.min(scored.length, Math.max(8, settings.kNearest))
-                             : Math.min(scored.length, settings.kNearest);
-    const cand = scored.slice(0, Math.max(1, take));
-    const opponent = cand.length ? cand[Math.floor(Math.random()*cand.length)].k
-                                 : // fallback: closest by Elo ignoring recent
-                                   keys.slice().sort((a,b)=>Math.abs(R[a].rating-aR)-Math.abs(R[b].rating-aR))
-                                       .find(k=>k!==anchor) || keys.find(k=>k!==anchor);
-    return (Math.random()<0.5) ? [anchor, opponent] : [opponent, anchor];
+  // ---- scope / mode ----
+  let scopeKeys = keys.slice();
+  if (settings.mode === 'focus' && settings.focusN > 0){
+    scopeKeys = keys.slice().sort((a,b)=>R[b].rating-R[a].rating).slice(0, settings.focusN);
   }
+
+  // auto-calibrate flag (coverage first until everyone has matches >= calibMin)
+  const minMatches = Math.min(...scopeKeys.map(k=>R[k].matches||0));
+  const calibrating = (settings.mode==='calibrate') || (settings.mode==='auto' && minMatches < settings.calibMin);
+
+  // exploration rate by mode
+  const epsilon = (settings.mode==='near' || settings.mode==='focus') ? settings.epsilon*0.5
+                   : (settings.mode==='calibrate') ? settings.epsilon*1.2
+                   : settings.epsilon;
+
+  // ---- helper: expected score for A vs B ----
+  const E = (ra, rb) => 1/(1+Math.pow(10,(rb-ra)/400));
+
+  // ---- ε-explore branch (random but avoids recent) ----
+  if (settings.mode==='explore' || Math.random() < epsilon){
+    for (let tries=0; tries<50; tries++){
+      const a = scopeKeys[Math.floor(Math.random()*scopeKeys.length)];
+      let b=a; while(b===a){ b = scopeKeys[Math.floor(Math.random()*scopeKeys.length)]; }
+      if (!seenRecently(a,b)) return (Math.random()<0.5) ? [a,b] : [b,a];
+    }
+  }
+
+  // ---- anchor: bias toward low matches (coverage) ----
+  const weights = scopeKeys.map(k => 1 / (1 + (R[k].matches||0)));
+  const totalW = weights.reduce((a,b)=>a+b,0);
+  let r = Math.random() * totalW, anchor = scopeKeys[0];
+  for (let i=0;i<scopeKeys.length;i++){ r -= weights[i]; if (r<=0){ anchor = scopeKeys[i]; break; } }
+
+  const aR = R[anchor].rating;
+  const aM = R[anchor].matches||0;
+
+  // ---- adaptive expected-score window ----
+  // Target tighter coin-flips as matches grow; wider during calibration.
+  const baseLow  = calibrating ? 0.35 : 0.40;
+  const baseHigh = calibrating ? 0.65 : 0.60;
+  // tighten with matches (cap somewhat)
+  const tighten = Math.min(0.08, (aM/60)*0.08); // up to ±0.08 tighter
+  let low  = baseLow  + tighten/2;
+  let high = baseHigh - tighten/2;
+
+  // ---- build candidate list by expected-score band ----
+  // We also prefer balancing match counts slightly, and avoid recent pairs.
+  const candidates = scopeKeys
+    .filter(k => k !== anchor && !seenRecently(anchor,k))
+    .map(k => {
+      const e = E(aR, R[k].rating);
+      const load = Math.abs((R[k].matches||0) - aM); // exposure balancing
+      return { k, e, load, diff: Math.abs(R[k].rating - aR) };
+    });
+
+  // Try progressively relaxed windows if empty
+  let chosen = null;
+  const relaxSteps = [0, 0.03, 0.06, 0.10, 0.15]; // widen until we find something
+  for (const widen of relaxSteps){
+    const lo = Math.max(0.0, low  - widen);
+    const hi = Math.min(1.0, high + widen);
+    const pool = candidates
+      .filter(c => c.e >= lo && c.e <= hi)
+      .sort((x,y)=>{
+        // primary: closeness to 0.5 expected (more info)
+        const dx = Math.abs(x.e - 0.5), dy = Math.abs(y.e - 0.5);
+        if (dx !== dy) return dx - dy;
+        // secondary: balance matches
+        if (x.load !== y.load) return x.load - y.load;
+        // tertiary: smaller Elo gap
+        return x.diff - y.diff;
+      });
+    if (pool.length){
+      // pick among top k to keep variety
+      const kTake = Math.min(settings.kNearest, pool.length);
+      chosen = pool[Math.floor(Math.random()*kTake)].k;
+      break;
+    }
+  }
+
+  if (!chosen){
+    // Fallback: nearest by Elo ignoring recent
+    chosen = scopeKeys.slice().sort((a,b)=>Math.abs(R[a].rating-aR)-Math.abs(R[b].rating-aR))
+                      .find(k=>k!==anchor) || scopeKeys.find(k=>k!==anchor);
+  }
+
+  return Math.random()<0.5 ? [anchor, chosen] : [chosen, anchor];
+}
 
   // UI refs
   const leftTitle = document.getElementById('leftTitle');
