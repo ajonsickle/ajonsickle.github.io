@@ -16,7 +16,7 @@
   .section { border:1px solid #252a34; border-radius:12px; padding:12px; margin:12px 0; background:#161a22; }
   .row { display:flex; gap:8px; flex-wrap:wrap; }
   .col { flex:1 1 280px; }
-  button { padding: 12px 14px; border-radius: 12px; border:1px solid #2a2f3f; background:#1b2030; color:#fff; font-weight:600; }
+  button { padding: 12px 14px; border-radius: 12px; border:1px solid #2a2f3f; background:#1b2030; color:#fff; font-weight:600; cursor:pointer; }
   textarea, input { width:100%; padding:10px; border-radius:10px; border:1px solid #2a2f3f; background:#121520; color:#fff; }
   .muted { color:#9aa1ac; }
   .card { border:1px solid #2a2f3f; border-radius: 12px; padding: 12px; background:#121520; min-height:100px; }
@@ -41,6 +41,14 @@
         <button id="btnImport">Import</button>
         <button id="btnDemo">Load Demo</button>
         <button id="btnClear">Clear All</button>
+        <!-- NEW: transfer buttons -->
+        <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
+          <button id="btnExportJson">Export JSON</button>
+          <button id="btnImportJson">Import JSON</button>
+          <button id="btnExportCsv">Export CSV</button>
+          <button id="btnCopyLeaderboard">Copy Leaderboard</button>
+          <button id="btnPasteJson">Paste JSON</button>
+        </div>
       </div>
     </div>
     <div id="status" class="muted">Ready.</div>
@@ -89,7 +97,6 @@ const btnReload = document.getElementById('btnReload');
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js').then(reg => {
-    // Listen for updates
     if (reg.waiting) btnReload.style.display = 'inline-block';
     reg.addEventListener('updatefound', () => {
       const newWorker = reg.installing;
@@ -158,7 +165,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if(t) out.push({title:t, artist:a});
     }
     // dedupe
-    const seen = new Set(); const uniq=[];
+    const seen = new Set();
+    const uniq=[];
     out.forEach(s=>{ const k=key(s); if(!seen.has(k)){ seen.add(k); uniq.push(s);} });
     return uniq;
   }
@@ -181,7 +189,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if(keys.length<2) return [null,null];
     const a = keys[Math.floor(Math.random()*keys.length)];
     let b=a; while(b===a){ b = keys[Math.floor(Math.random()*keys.length)]; }
-    if(Math.random()<0.5) return [a,b]; else return [b,a];
+    return (Math.random()<0.5) ? [a,b] : [b,a];
   }
 
   const leftTitle = document.getElementById('leftTitle');
@@ -221,6 +229,31 @@ document.addEventListener('DOMContentLoaded', () => {
       tr.innerHTML = `<td>${i+1}</td><td>${kv[0]}</td><td>${kv[1].rating.toFixed(1)}</td><td>${kv[1].matches}</td>`;
       rows.appendChild(tr);
     });
+  }
+
+  // --- helpers for transfer ---
+  function download(filename, data, type = "application/json") {
+    const blob = new Blob([data], { type });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function copyToClipboard(text){
+    try{
+      await navigator.clipboard.writeText(text);
+      log('Copied to clipboard.');
+    }catch{
+      // Fallback
+      const ta=document.createElement('textarea');
+      ta.value=text; document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); ta.remove();
+      log('Copied to clipboard.');
+    }
   }
 
   // Buttons
@@ -290,12 +323,91 @@ document.addEventListener('DOMContentLoaded', () => {
     log('Undid last.'); next();
   });
 
+  // --- NEW: Export/Import actions ---
+  document.getElementById('btnExportJson').addEventListener('click', async ()=>{
+    const payload = {
+      version: 1,
+      ts: new Date().toISOString(),
+      songs: S.songs,
+      ratings: S.ratings,
+      history: S.hist
+    };
+    const data = JSON.stringify(payload, null, 2);
+    // If Share API exists, offer it
+    if (navigator.share) {
+      try{
+        const file = new File([data], 'elo_backup.json', { type: 'application/json' });
+        await navigator.share({ files: [file], title: 'Elo backup', text: 'Elo backup JSON' });
+        log('Shared backup via system share sheet.');
+        return;
+      }catch{}
+    }
+    download('elo_backup.json', data, 'application/json');
+    log('Exported elo_backup.json');
+  });
+
+  document.getElementById('btnImportJson').addEventListener('click', ()=>{
+    const inp = document.createElement('input');
+    inp.type='file'; inp.accept='application/json';
+    inp.onchange = async (e)=>{
+      const f=e.target.files?.[0]; if(!f) return;
+      try{
+        const text = await f.text();
+        const data = JSON.parse(text);
+        if (!data || !data.songs || !data.ratings) { log('Import error: invalid JSON'); return; }
+        S.songs   = data.songs;
+        S.ratings = data.ratings;
+        S.hist    = Array.isArray(data.history)? data.history : [];
+        // ensure every song has a rating
+        const base=S.ratings;
+        S.songs.forEach(s=>{ const k=key(s); if(!base[k]) base[k]={rating:INITIAL,matches:0}; });
+        S.ratings=base;
+        log('Imported backup.'); next();
+      }catch(err){ log('Import error: '+(err?.message||String(err))); }
+    };
+    inp.click();
+  });
+
+  document.getElementById('btnExportCsv').addEventListener('click', ()=>{
+    const rows = Object.entries(S.ratings)
+      .sort((a,b)=>b[1].rating-a[1].rating)
+      .map(([k,v],i)=>`${i+1},"${k.replace(/"/g,'""')}",${v.rating.toFixed(3)},${v.matches}`);
+    const csv = ["rank,title_artist,rating,matches", ...rows].join("\n");
+    download('ranking.csv', csv, 'text/csv');
+    log('Exported ranking.csv');
+  });
+
+  document.getElementById('btnCopyLeaderboard').addEventListener('click', async ()=>{
+    const rows = Object.entries(S.ratings)
+      .sort((a,b)=>b[1].rating-a[1].rating)
+      .map(([k,v],i)=>`${i+1},"${k.replace(/"/g,'""')}",${v.rating.toFixed(3)},${v.matches}`);
+    const csv = ["rank,title_artist,rating,matches", ...rows].join("\n");
+    await copyToClipboard(csv);
+  });
+
+  document.getElementById('btnPasteJson').addEventListener('click', ()=>{
+    const txt = prompt('Paste backup JSON here:');
+    if(!txt) return;
+    try{
+      const data = JSON.parse(txt);
+      if (!data || !data.songs || !data.ratings) { log('Paste error: invalid JSON'); return; }
+      S.songs   = data.songs;
+      S.ratings = data.ratings;
+      S.hist    = Array.isArray(data.history)? data.history : [];
+      // ensure ratings for all songs
+      const base=S.ratings;
+      S.songs.forEach(s=>{ const k=key(s); if(!base[k]) base[k]={rating:INITIAL,matches:0}; });
+      S.ratings=base;
+      log('Imported from pasted JSON.'); next();
+    }catch(err){ log('Paste error: '+(err?.message||String(err))); }
+  });
+
   // autostart if data exists
   if(S.songs.length>=2){
     ensureRatings();
     next();
   } else {
-    log('Paste CSV and press Import, or tap Load Demo. Then use the Install button to add to Home Screen.');
+    log('Paste CSV and press Import, or tap Load Demo. Then use the transfer buttons to move data between devices.');
   }
 });
 </script>
